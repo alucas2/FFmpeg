@@ -57,6 +57,8 @@ static int cdata_probe(const AVProbeData *p)
 
     if (b[0] == 0x04 && (b[1] == 0x00 || b[1] == 0x04 || b[1] == 0x0C || b[1] == 0x14))
         return AVPROBE_SCORE_MAX/8;
+    if (b[0] == 0x05 && (b[1] == 0x00 || b[1] == 0x04))
+        return AVPROBE_SCORE_MAX/8;
     return 0;
 }
 

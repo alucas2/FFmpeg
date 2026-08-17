@@ -33,7 +33,6 @@
 #include "mpegaudiodecheader.h"
 #include "put_bits.h"
 #include "packet.h"
-#include "mpegaudiodata.h"
 #include <stdbool.h>
 
 #define USE_FLOATS 0
@@ -88,6 +87,7 @@ static av_cold int ealayer3_decode_init(AVCodecContext *avctx) {
     ctx->gr0_valid = false;
     ctx->gr0_pkt = av_packet_alloc();
     decode_ctx_init(avctx, &ctx->inner); // Function from mpegaudiodec_template.c
+    avctx->sample_fmt = OUT_FMT; // Interleave to make the copying of uncompressed samples easier
     return 0;
 }
 
@@ -98,6 +98,27 @@ static void copy_bits(GetBitContext *src, PutBitContext *dst, unsigned n) {
     }
     if (n != 0)
         put_bits(dst, n, get_bits_long(src, n));
+}
+
+static int copy_uncompressed_samples(
+    AVCodecContext *avctx,
+    AVFrame *frame,
+    EALayer3Granule *gr,
+    AVPacket *gr_pkt
+) {
+    unsigned nb_channels = gr->header.mode == MPA_MONO ? 1 : 2;
+    uint8_t *dst = frame->extended_data[0] + gr->uncompressed_pos;
+    uint8_t *src = gr_pkt->data + gr->uncompressed_offset;
+    unsigned size = nb_channels * gr->uncompressed_len * sizeof(OUT_INT);
+    if (
+        size > (frame->extended_data[0] + frame->linesize[0] - dst)
+        || size > gr_pkt->data + gr_pkt->size - src
+    ) {
+        return AVERROR_INVALIDDATA;
+    }
+    av_log(avctx, AV_LOG_DEBUG, "copied uncompressed samples: pos=%d, len=%d\n", gr->uncompressed_pos, gr->uncompressed_len);
+    memcpy(dst, src, size);
+    return 0;
 }
 
 #define MAX_MPEG_FRAME_BUFFER 2880
@@ -185,6 +206,15 @@ static int ealayer3_reconstruct_decode(
     if (ret < 0)
         return ret;
     avctx->sample_rate = ctx->inner.sample_rate;
+
+    // Put the interleaved uncompressed samples
+    if (gr0->has_uncompressed) {
+        copy_uncompressed_samples(avctx, frame, gr0, gr0_pkt);
+    }
+    if (gr0->header.version == MPEG_VER_1 && gr1->has_uncompressed) {
+        copy_uncompressed_samples(avctx, frame, gr1, gr1_pkt);
+    }
+
     return 0;
 }
 
